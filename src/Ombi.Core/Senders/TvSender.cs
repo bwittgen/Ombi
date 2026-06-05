@@ -9,6 +9,7 @@ using Ombi.Api.External.ExternalApis.SickRage.Models;
 using Ombi.Api.External.ExternalApis.Sonarr;
 using Ombi.Api.External.ExternalApis.Sonarr.Models;
 using Ombi.Core.Settings;
+using Ombi.Core.Services;
 using Ombi.Helpers;
 using Ombi.Settings.Settings.Models.External;
 using Ombi.Store.Entities;
@@ -21,7 +22,8 @@ namespace Ombi.Core.Senders
     {
         public TvSender(ISonarrV3Api sonarrV3Api, ILogger<TvSender> log, ISettingsService<SonarrSettings> sonarrSettings,
             ISettingsService<SickRageSettings> srSettings,
-            ISickRageApi srApi, IRepository<UserQualityProfiles> userProfiles, IRepository<RequestQueue> requestQueue, INotificationHelper notify)
+            ISickRageApi srApi, IRepository<UserQualityProfiles> userProfiles, IRepository<RequestQueue> requestQueue, INotificationHelper notify,
+            IFaultQueueResilienceService faultQueueResilience)
         {
             SonarrApi = sonarrV3Api;
             Logger = log;
@@ -31,6 +33,7 @@ namespace Ombi.Core.Senders
             UserQualityProfiles = userProfiles;
             _requestQueueRepository = requestQueue;
             _notificationHelper = notify;
+            _faultQueueResilience = faultQueueResilience;
         }
 
         private ISonarrV3Api SonarrApi { get; }
@@ -41,6 +44,7 @@ namespace Ombi.Core.Senders
         private IRepository<UserQualityProfiles> UserQualityProfiles { get; }
         private readonly IRepository<RequestQueue> _requestQueueRepository;
         private readonly INotificationHelper _notificationHelper;
+        private readonly IFaultQueueResilienceService _faultQueueResilience;
 
         public async Task<SenderResult> Send(ChildRequests model)
         {
@@ -103,7 +107,10 @@ namespace Ombi.Core.Senders
                         Type = RequestType.TvShow,
                         RetryCount = 0
                     });
-                    await _notificationHelper.Notify(model, NotificationType.ItemAddedToFaultQueue);
+                    if (await _faultQueueResilience.ShouldNotifyFaultQueueAsync(RequestType.TvShow))
+                    {
+                        await _notificationHelper.Notify(model, NotificationType.ItemAddedToFaultQueue);
+                    }
                 }
             }
 

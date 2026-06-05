@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Ombi.Api.External.ExternalApis.Lidarr;
 using Ombi.Api.External.ExternalApis.Lidarr.Models;
 using Ombi.Core.Settings;
+using Ombi.Core.Services;
 using Ombi.Helpers;
 using Ombi.Settings.Settings.Models.External;
 using Ombi.Store.Entities;
@@ -18,13 +19,14 @@ namespace Ombi.Core.Senders
     public class MusicSender : IMusicSender
     {
         public MusicSender(ISettingsService<LidarrSettings> lidarr, ILidarrApi lidarrApi, ILogger<MusicSender> log,
-            IRepository<RequestQueue> requestQueue, INotificationHelper notify)
+            IRepository<RequestQueue> requestQueue, INotificationHelper notify, IFaultQueueResilienceService faultQueueResilience)
         {
             _lidarrSettings = lidarr;
             _lidarrApi = lidarrApi;
             _log = log;
             _requestQueueRepository = requestQueue;
             _notificationHelper = notify;
+            _faultQueueResilience = faultQueueResilience;
         }
 
         private readonly ISettingsService<LidarrSettings> _lidarrSettings;
@@ -32,6 +34,7 @@ namespace Ombi.Core.Senders
         private readonly ILogger _log;
         private readonly IRepository<RequestQueue> _requestQueueRepository;
         private readonly INotificationHelper _notificationHelper;
+        private readonly IFaultQueueResilienceService _faultQueueResilience;
 
         public async Task<SenderResult> Send(AlbumRequest model)
         {
@@ -65,7 +68,10 @@ namespace Ombi.Core.Senders
                         Type = RequestType.Album,
                         RetryCount = 0
                     });
-                    await _notificationHelper.Notify(model, NotificationType.ItemAddedToFaultQueue);
+                    if (await _faultQueueResilience.ShouldNotifyFaultQueueAsync(RequestType.Album))
+                    {
+                        await _notificationHelper.Notify(model, NotificationType.ItemAddedToFaultQueue);
+                    }
                 }
             }
 

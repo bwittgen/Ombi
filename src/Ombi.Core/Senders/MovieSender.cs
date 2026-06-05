@@ -7,6 +7,7 @@ using Ombi.Api.External.ExternalApis.CouchPotato;
 using Ombi.Api.External.ExternalApis.DogNzb.Models;
 using Ombi.Api.External.ExternalApis.Radarr;
 using Ombi.Core.Settings;
+using Ombi.Core.Services;
 using Ombi.Helpers;
 using Ombi.Settings.Settings.Models.External;
 using Ombi.Store.Entities.Requests;
@@ -25,7 +26,7 @@ namespace Ombi.Core.Senders
         public MovieSender(ISettingsService<RadarrSettings> radarrSettings, ISettingsService<Radarr4KSettings> radarr4kSettings, ILogger<MovieSender> log,
             ISettingsService<DogNzbSettings> dogSettings, IDogNzbApi dogApi, ISettingsService<CouchPotatoSettings> cpSettings,
             ICouchPotatoApi cpApi, IRepository<UserQualityProfiles> userProfiles, IRepository<RequestQueue> requestQueue, INotificationHelper notify,
-            IRadarrV3Api radarrV3Api)
+            IRadarrV3Api radarrV3Api, IFaultQueueResilienceService faultQueueResilience)
         {
             _radarrSettings = radarrSettings;
             _log = log;
@@ -38,6 +39,7 @@ namespace Ombi.Core.Senders
             _notificationHelper = notify;
             _radarrV3Api = radarrV3Api;
             _radarr4KSettings = radarr4kSettings;
+            _faultQueueResilience = faultQueueResilience;
         }
 
         private readonly ISettingsService<RadarrSettings> _radarrSettings;
@@ -51,6 +53,7 @@ namespace Ombi.Core.Senders
         private readonly IRepository<RequestQueue> _requestQueuRepository;
         private readonly INotificationHelper _notificationHelper;
         private readonly IRadarrV3Api _radarrV3Api;
+        private readonly IFaultQueueResilienceService _faultQueueResilience;
 
         public async Task<SenderResult> Send(MovieRequests model, bool is4K)
         {
@@ -110,7 +113,10 @@ namespace Ombi.Core.Senders
                         Type = RequestType.Movie,
                         RetryCount = 0
                     });
-                    await _notificationHelper.Notify(model, NotificationType.ItemAddedToFaultQueue);
+                    if (await _faultQueueResilience.ShouldNotifyFaultQueueAsync(RequestType.Movie))
+                    {
+                        await _notificationHelper.Notify(model, NotificationType.ItemAddedToFaultQueue);
+                    }
                 }
             }
 

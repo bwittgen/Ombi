@@ -24,6 +24,15 @@ namespace Ombi.Settings.Settings.Models
         public int AutoDeleteAfterDays { get; set; }
         public Branch Branch { get; set; }
 
+        // When enabled, Ombi stops sending the "Item Added To Fault Queue" notification for every
+        // failed request once a downstream DVR (Sonarr/Radarr/Lidarr) outage is detected, to avoid
+        // spamming users when a burst of requests fails against an unhealthy instance.
+        public bool SuppressFaultQueueNotificationsDuringOutage { get; set; }
+        // Number of fault-queue additions within the detection window before an outage is assumed.
+        public int OutageFailureThreshold { get; set; }
+        // Rolling window (in minutes) used to count fault-queue additions for outage detection.
+        public int OutageDetectionWindowMinutes { get; set; }
+
         //INTERNAL
         public bool HasMigratedOldTvDbData { get; set; }
         public bool Set { get; set; }

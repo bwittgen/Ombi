@@ -253,6 +253,7 @@ namespace Ombi.DependencyInjection
             services.AddTransient<ILegacyMobileNotification, LegacyMobileNotification>();
             services.AddTransient<IChangeLogProcessor, ChangeLogProcessor>();
             services.AddScoped<IFeatureService, FeatureService>();
+            services.AddScoped<IFaultQueueResilienceService, FaultQueueResilienceService>();
             services.AddTransient<IRecentlyRequestedService, RecentlyRequestedService>();
             services.AddTransient<IPlexService, PlexService>();
             services.AddScoped<IPlexWatchlistStatusStore, PlexWatchlistStatusStore>();
