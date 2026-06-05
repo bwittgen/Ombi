@@ -12,20 +12,25 @@ namespace Ombi.Core.Services
     public class FaultQueueResilienceService : IFaultQueueResilienceService
     {
         private readonly ISettingsService<OmbiSettings> _ombiSettings;
+        private readonly IArrHealthProbe _healthProbe;
         private readonly IMemoryCache _cache;
 
-        public FaultQueueResilienceService(ISettingsService<OmbiSettings> ombiSettings, IMemoryCache cache)
+        public FaultQueueResilienceService(
+            ISettingsService<OmbiSettings> ombiSettings,
+            IArrHealthProbe healthProbe,
+            IMemoryCache cache)
         {
             _ombiSettings = ombiSettings;
+            _healthProbe = healthProbe;
             _cache = cache;
         }
 
-        internal const int DefaultFailureThreshold = 3;
-        internal const int DefaultWindowMinutes = 10;
-        private const string CacheKey = "FaultQueueResilience_WindowState";
+        internal const int DefaultFailureThreshold = 2;
+        internal const int DefaultWindowMinutes = 30;
+        private const string CacheKey = "FaultQueueResilience_IncidentState";
 
         /// <summary>
-        /// Overridable clock seam so the rolling-window logic can be tested deterministically.
+        /// Overridable clock seam so the staleness logic can be tested deterministically.
         /// </summary>
         protected virtual DateTime UtcNow => DateTime.UtcNow;
 
@@ -40,44 +45,73 @@ namespace Ombi.Core.Services
                 return true;
             }
 
+            // Confirm whether the failure is actually an outage by probing the downstream Arr
+            // service. A healthy probe means the send failure is item-specific (e.g. bad metadata),
+            // so we still notify; only a confirmed-unhealthy service triggers suppression.
+            var health = await _healthProbe.ProbeAsync(requestType);
+
             var threshold = settings.OutageFailureThreshold > 0
                 ? settings.OutageFailureThreshold
                 : DefaultFailureThreshold;
-            var window = TimeSpan.FromMinutes(settings.OutageDetectionWindowMinutes > 0
+            var staleAfter = TimeSpan.FromMinutes(settings.OutageDetectionWindowMinutes > 0
                 ? settings.OutageDetectionWindowMinutes
                 : DefaultWindowMinutes);
 
             var state = _cache.GetOrCreate(CacheKey, entry =>
             {
                 entry.Priority = CacheItemPriority.NeverRemove;
-                return new ConcurrentDictionary<RequestType, FaultWindow>();
+                return new ConcurrentDictionary<RequestType, IncidentState>();
             });
 
-            var windowState = state.GetOrAdd(requestType, _ => new FaultWindow());
+            var incident = state.GetOrAdd(requestType, _ => new IncidentState());
             var now = UtcNow;
 
-            lock (windowState)
+            lock (incident)
             {
-                // Reset the counter when the previous failure is older than the detection window,
-                // so a healthy period naturally clears the incident without needing success hooks.
-                if (now - windowState.LastFailureUtc > window)
+                // Drop stale incident state so a fresh burst of failures is evaluated from scratch.
+                if (now - incident.LastProbeUtc > staleAfter)
                 {
-                    windowState.Count = 0;
+                    incident.ConsecutiveUnhealthy = 0;
+                    incident.IncidentActive = false;
                 }
 
-                windowState.Count++;
-                windowState.LastFailureUtc = now;
+                incident.LastProbeUtc = now;
 
-                // Notify while we are below the threshold (healthy/degraded). Once the threshold is
-                // reached we treat it as an active outage and suppress the per-item notifications.
-                return windowState.Count < threshold;
+                if (health != ArrHealthStatus.Unhealthy)
+                {
+                    // Service is healthy (or not configured / cannot be assessed). Clear any active
+                    // incident — a subsequent healthy probe is our recovery signal — and notify,
+                    // because a failure while the service is up is a genuine per-item problem.
+                    incident.ConsecutiveUnhealthy = 0;
+                    incident.IncidentActive = false;
+                    return true;
+                }
+
+                // Confirmed unhealthy.
+                if (incident.IncidentActive)
+                {
+                    // Already inside a known outage: suppress the per-item spam.
+                    return false;
+                }
+
+                incident.ConsecutiveUnhealthy++;
+
+                if (incident.ConsecutiveUnhealthy >= threshold)
+                {
+                    // Transition into an active incident. Allow this single notification through so
+                    // the outage is still surfaced once, then suppress everything that follows.
+                    incident.IncidentActive = true;
+                }
+
+                return true;
             }
         }
 
-        private sealed class FaultWindow
+        private sealed class IncidentState
         {
-            public int Count { get; set; }
-            public DateTime LastFailureUtc { get; set; }
+            public int ConsecutiveUnhealthy { get; set; }
+            public bool IncidentActive { get; set; }
+            public DateTime LastProbeUtc { get; set; }
         }
     }
 }
